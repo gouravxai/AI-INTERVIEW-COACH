@@ -10,7 +10,6 @@ load_dotenv()
 
 st.set_page_config(page_title="Interview Coach", layout="wide")
 
-# (Tumhara styling wala block as it is maintain rahega)
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
@@ -156,16 +155,15 @@ div[data-testid="stSelectbox"] > div {
     border-radius: 0 !important;
     font-family: 'IBM Plex Mono', monospace !important;
 }
-div[data-testid="stTextInput"] input {
-    background: #111 !important;
-    border: 1px solid #1e1e1e !important;
-    border-radius: 0 !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
-# ── SESSION STATE ─────────────────────────────────────────────────────────
+def load_api_key():
+    try:
+        return st.secrets["GROQ_API_KEY"]
+    except Exception:
+        return os.getenv('GROQ_API_KEY', '')
+
 defaults = {
     'chat_history': [],
     'current_question': 'What is the main difference between a List and a Tuple in Python?',
@@ -177,23 +175,21 @@ defaults = {
     'answer_duration': 0,
     'scores': [],
     'history_log': [],
-    'groq_key': os.getenv('GROQ_API_KEY', ''),
-    'last_processed_audio_id': None,  # Fixes the double processing loop bug
+    'last_processed_audio_id': None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ── HELPERS ───────────────────────────────────────────────────────────────
 def get_client():
     from groq import Groq
-    if not st.session_state.groq_key:
-        st.error('Add your Groq API key in the sidebar.')
+    api_key = load_api_key()
+    if not api_key:
+        st.error('GROQ_API_KEY not found. Add it to Streamlit Secrets or .env file.')
         return None
-    return Groq(api_key=st.session_state.groq_key)
+    return Groq(api_key=api_key)
 
 def process_audio_live(audio_buffer):
-    """Top 5% Feature: Processes dynamic web audio buffer in-memory with zero local disk files."""
     client = get_client()
     if not client:
         return None
@@ -203,7 +199,7 @@ def process_audio_live(audio_buffer):
         )
         return transcript
     except Exception as e:
-        st.error(f'Live Transcription failed: {e}')
+        st.error(f'Transcription failed: {e}')
         return None
 
 def generate_evaluation(history):
@@ -255,12 +251,9 @@ def speak(text):
     from gtts import gTTS
     clean = text.replace('*', '').replace('#', '')
     tts = gTTS(text=clean, lang='en', tld='com')
-    
-    # Save to dynamic memory stream instead of writing to physical C:// drive path
     audio_buffer = io.BytesIO()
     tts.write_to_fp(audio_buffer)
     audio_buffer.seek(0)
-    
     b64 = base64.b64encode(audio_buffer.read()).decode()
     st.markdown(f'<audio autoplay><source src="data:audio/mp3;base64,{b64}"></audio>', unsafe_allow_html=True)
 
@@ -269,38 +262,25 @@ def avg_score():
         return 0
     return round(sum(st.session_state.scores) / len(st.session_state.scores), 1)
 
-# ── SIDEBAR ───────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="section-label">Config</div>', unsafe_allow_html=True)
-    key = st.text_input('Groq API Key', value=st.session_state.groq_key, type='password', placeholder='gsk_...')
-    if key:
-        st.session_state.groq_key = key
-
     st.markdown('<div class="section-label">Topic</div>', unsafe_allow_html=True)
     starters = {
-        'Python Basics':   'What is the main difference between a List and a Tuple in Python?',
-        'Data Science':    'What is the difference between correlation and causation?',
-        'Machine Learning':'What is overfitting and how do you prevent it?',
-        'Deep Learning':   'What is the vanishing gradient problem in neural networks?',
+        'Python Basics':    'What is the main difference between a List and a Tuple in Python?',
+        'Data Science':     'What is the difference between correlation and causation?',
+        'Machine Learning': 'What is overfitting and how do you prevent it?',
+        'Deep Learning':    'What is the vanishing gradient problem in neural networks?',
     }
     selected = st.selectbox('Topic', list(starters.keys()), label_visibility='collapsed')
-
     st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
     if st.button('Start New Interview'):
-        saved_key = st.session_state.groq_key
         for k, v in defaults.items():
             st.session_state[k] = v
-        st.session_state.groq_key = saved_key
         st.session_state.current_question = starters[selected]
         st.rerun()
 
-# ── HEADER ────────────────────────────────────────────────────────────────
 st.markdown(f'<h1>Interview Coach / Round {st.session_state.round_num:02d}</h1>', unsafe_allow_html=True)
-
-# ── QUESTION ──────────────────────────────────────────────────────────────
 st.markdown(f'<div class="question-box">{st.session_state.current_question}</div>', unsafe_allow_html=True)
 
-# ── METRICS ───────────────────────────────────────────────────────────────
 dur = int(st.session_state.answer_duration)
 dur_class = 'warn' if dur < 20 and dur > 0 else ''
 fil_class = 'bad' if st.session_state.total_fillers > 5 else 'warn' if st.session_state.total_fillers > 0 else ''
@@ -326,7 +306,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── COLUMNS ───────────────────────────────────────────────────────────────
 col_left, col_right = st.columns([1, 1], gap='large')
 
 with col_left:
@@ -334,54 +313,37 @@ with col_left:
 
     from streamlit_mic_recorder import mic_recorder
 
-    # Live Audio Capturer
     audio = mic_recorder(
-        start_prompt='🔴 Click to Speak',
-        stop_prompt='⏹️ Stop & Submit Instantly',
+        start_prompt='Click to Speak',
+        stop_prompt='Stop & Submit',
         just_once=True,
         use_container_width=True,
         key='mic'
     )
 
-    # Completely Automated Processing Loop (No extra manual buttons needed!)
     if audio and audio['id'] != st.session_state.last_processed_audio_id:
         st.session_state.last_processed_audio_id = audio['id']
-        
-        # 1. Capture dynamic audio bytes directly from the user's browser buffer
-        audio_bytes = audio['bytes']
-        
-        # 2. Package into a virtual, in-memory system (No physical file setup on disk)
-        live_audio_file = io.BytesIO(audio_bytes)
-        live_audio_file.name = "live_response.wav"
-        
+        live_audio_file = io.BytesIO(audio['bytes'])
+        live_audio_file.name = 'live_response.wav'
         start_time = time.time()
-        with st.spinner('Transcribing your voice answer live...'):
+        with st.spinner('Transcribing...'):
             transcript = process_audio_live(live_audio_file)
             duration = round(time.time() - start_time, 2)
-            
         if transcript:
             st.session_state.transcript = transcript
             st.session_state.answer_duration = max(duration, len(transcript.split()) * 0.4)
-            
-            # Metric Evaluations
             fc, total = count_fillers(transcript)
             st.session_state.filler_count = fc
             st.session_state.total_fillers = total
-            
-            # Save to conversation context memory
             st.session_state.chat_history.append({
                 'role': 'user',
                 'content': f'Question: {st.session_state.current_question}\nAnswer: {transcript}'
             })
-            
-            # Trigger LLM Evaluation State
-            with st.spinner('AI Interviewer is analyzing your response...'):
+            with st.spinner('AI is evaluating...'):
                 ai_response = generate_evaluation(st.session_state.chat_history)
-                
             if ai_response:
                 st.session_state.ai_response = ai_response
                 st.session_state.chat_history.append({'role': 'assistant', 'content': ai_response})
-                
                 score = extract_score(ai_response)
                 if score:
                     st.session_state.scores.append(score)
@@ -390,8 +352,6 @@ with col_left:
                     'question': st.session_state.current_question,
                     'score': score
                 })
-                
-                # Setup next question environment automatically
                 st.session_state.current_question = extract_next_question(ai_response)
                 st.session_state.round_num += 1
                 st.rerun()
@@ -401,7 +361,7 @@ with col_left:
         tags = ''.join([f'<span class="filler-tag">{w} x{c}</span>' for w, c in st.session_state.filler_count.items()])
         st.markdown(f'<div>{tags}</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="section-label">Session History Log</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Session History</div>', unsafe_allow_html=True)
     if st.session_state.history_log:
         for item in reversed(st.session_state.history_log):
             q_short = item['question'][:55] + '...' if len(item['question']) > 55 else item['question']
@@ -415,11 +375,11 @@ with col_left:
         st.markdown('<p style="font-family:IBM Plex Mono,monospace;font-size:12px;color:#333;">No rounds logged yet.</p>', unsafe_allow_html=True)
 
 with col_right:
-    st.markdown('<div class="section-label">Latest Audio Transcript</div>', unsafe_allow_html=True)
-    text = st.session_state.transcript or 'Your spoken words will instantly appear here after processing.'
+    st.markdown('<div class="section-label">Transcript</div>', unsafe_allow_html=True)
+    text = st.session_state.transcript or 'Your spoken words will appear here after processing.'
     st.markdown(f'<div class="transcript-area">{text}</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="section-label">FAANG Grade Evaluation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">Evaluation</div>', unsafe_allow_html=True)
     if st.session_state.ai_response:
         for section in st.session_state.ai_response.split('###'):
             section = section.strip()
@@ -440,12 +400,12 @@ with col_right:
         st.markdown("""
         <div class="eval-section">
             <div class="eval-head">Awaiting Answer</div>
-            <div class="eval-body" style="color:#333;">Click the mic on the left, speak your answer, and see your analytics update live.</div>
+            <div class="eval-body" style="color:#333;">Click the mic, speak your answer, results appear automatically.</div>
         </div>
         """, unsafe_allow_html=True)
 
     st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
-    if st.button('🔊 Read Question Aloud'):
+    if st.button('Read Question Aloud'):
         try:
             speak(st.session_state.current_question)
         except Exception as e:
